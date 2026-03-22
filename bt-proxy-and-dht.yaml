@@ -1,0 +1,39 @@
+esphome:
+  name: esp11_bt_proxy_dht
+  friendly_name: ESP32 Bluetooth Proxy + DHT11
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_pass
+  #  hostname: esp11_bt_proxy_dht  # <- this is what your router will show
+
+
+# BLE proxy
+esp32_ble_tracker:
+bluetooth_proxy:
+  active: true
+
+# DHT22 / AM2302 sensor
+sensor:
+  - platform: dht
+    pin: GPIO4          # <-- your DHT data pin
+    model: DHT11
+    update_interval: 30s
+    temperature:
+      name: "DHT22 Temperature"
+      accuracy_decimals: 1
+    humidity:
+      name: "DHT22 Humidity"
+      accuracy_decimals: 1
