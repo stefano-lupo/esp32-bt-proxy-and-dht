@@ -19,6 +19,10 @@ wifi:
   password: !secret wifi_pass
   #  hostname: esp11_bt_proxy_dht  # <- this is what your router will show
 
+# Add this to report logs over UDP to loki etc on server
+syslog:
+  host: !secret home_server_ip
+  port: 5514
 
 # BLE proxy
 esp32_ble_tracker:
