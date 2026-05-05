@@ -1,0 +1,169 @@
+esphome:
+  name: living-room-esp32
+  friendly_name: ESP32 Bluetooth Proxy + DHT11 Living Room
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_pass
+  power_save_mode: none
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret wifi_pass
+
+web_server:
+  port: 80
+
+time:
+  - platform: sntp
+
+udp:
+  addresses: !secret home_server_ip
+
+syslog:
+  port: 5514
+
+esp32_ble:
+  max_connections: 1
+
+esp32_ble_tracker:
+  on_ble_advertise:
+    - mac_address: EC:A5:21:CA:9A:F8
+      then:
+        - lambda: |-
+            ESP_LOGI("blind", "Living room blind discovered, RSSI: %d dBm", x.get_rssi());
+
+sensor:
+  - platform: dht
+    pin: GPIO4
+    model: DHT11
+    update_interval: 60s
+    temperature:
+      name: "DHT22 Temperature"
+      accuracy_decimals: 1
+    humidity:
+      name: "DHT22 Humidity"
+      accuracy_decimals: 1
+
+ble_client:
+  - mac_address: EC:A5:21:CA:9A:F8
+    id: living_room_blind_ble
+    on_connect:
+      then:
+        - logger.log:
+            level: INFO
+            format: "Living room blind connected"
+        - lambda: id(lr_connected) = true;
+        - if:
+            condition:
+              lambda: return !id(lr_initialized);
+            then:
+              - lambda: id(lr_initialized) = true;
+              - delay: 500ms
+              - ble_client.ble_write:
+                  id: living_room_blind_ble
+                  service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+                  characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+                  value: [0xff, 0x03, 0x03, 0x03, 0x03, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78]
+              - delay: 500ms
+    on_disconnect:
+      then:
+        - logger.log:
+            level: WARN
+            format: "Living room blind disconnected"
+        - lambda: id(lr_connected) = false;
+
+globals:
+  - id: lr_pos_byte
+    type: int
+    initial_value: '0'
+  - id: lr_group_byte
+    type: int
+    initial_value: '0'
+  - id: lr_connected
+    type: bool
+    initial_value: 'false'
+  - id: lr_initialized
+    type: bool
+    initial_value: 'false'
+
+binary_sensor:
+  - platform: template
+    name: "Living Room Blind Connected"
+    device_class: connectivity
+    lambda: return id(lr_connected);
+
+cover:
+  - platform: template
+    id: living_room_blind_cover
+    name: "Living Room Blind"
+    device_class: blind
+    has_position: true
+    open_action:
+      - logger.log:
+          level: INFO
+          format: "Living room blind: open"
+      - ble_client.ble_write:
+          id: living_room_blind_ble
+          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+          value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0xe8, 0x03]
+      - cover.template.publish:
+          id: living_room_blind_cover
+          state: OPEN
+          current_operation: IDLE
+    close_action:
+      - logger.log:
+          level: INFO
+          format: "Living room blind: close"
+      - ble_client.ble_write:
+          id: living_room_blind_ble
+          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+          value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0x00, 0x00]
+      - cover.template.publish:
+          id: living_room_blind_cover
+          state: CLOSED
+          current_operation: IDLE
+    stop_action:
+      - logger.log:
+          level: INFO
+          format: "Living room blind: stop"
+      - ble_client.ble_write:
+          id: living_room_blind_ble
+          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+          value: [0xff, 0x78, 0xea, 0x41, 0x5f, 0x03, 0x01]
+      - cover.template.publish:
+          id: living_room_blind_cover
+          current_operation: IDLE
+    position_action:
+      - lambda: |-
+          int pct = (int)((1.0f - pos) * 100.0f + 0.5f);
+          id(lr_pos_byte) = ((100 - pct) * 10) % 256;
+          if (pct > 74) id(lr_group_byte) = 0x00;
+          else if (pct > 48) id(lr_group_byte) = 0x01;
+          else if (pct > 23) id(lr_group_byte) = 0x02;
+          else id(lr_group_byte) = 0x03;
+          ESP_LOGI("blind", "Living room blind: set position %d%%", (int)(pos*100));
+      - ble_client.ble_write:
+          id: living_room_blind_ble
+          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+          value: !lambda "return {0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, (uint8_t)id(lr_pos_byte), (uint8_t)id(lr_group_byte)};"
+      - cover.template.publish:
+          id: living_room_blind_cover
+          position: !lambda return pos;
+          current_operation: IDLE

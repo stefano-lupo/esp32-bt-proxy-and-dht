@@ -1,0 +1,177 @@
+esphome:
+  name: bedroom-esp32
+  friendly_name: ESP32 Bluetooth Proxy + DHT11 Bedroom
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_pass
+  power_save_mode: none
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret wifi_pass
+
+web_server:
+  port: 80
+
+time:
+  - platform: sntp
+
+udp:
+  addresses: !secret home_server_ip
+
+syslog:
+  port: 5514
+
+esp32_ble:
+  max_connections: 1
+
+esp32_ble_tracker:
+  on_ble_advertise:
+    - mac_address: FD:74:46:D2:50:0F
+      then:
+        - lambda: |-
+            ESP_LOGI("blind", "Bedroom blind discovered, RSSI: %d dBm", x.get_rssi());
+
+sensor:
+  - platform: dht
+    pin: GPIO4
+    model: DHT11
+    update_interval: 60s
+    temperature:
+      name: "DHT22 Temperature"
+      accuracy_decimals: 1
+    humidity:
+      name: "DHT22 Humidity"
+      accuracy_decimals: 1
+
+ble_client:
+  - mac_address: FD:74:46:D2:50:0F
+    id: bedroom_blind_ble
+    on_connect:
+      then:
+        - logger.log:
+            level: INFO
+            format: "Bedroom blind connected"
+        - lambda: id(br_connected) = true;
+        - if:
+            condition:
+              lambda: return !id(br_initialized);
+            then:
+              - lambda: id(br_initialized) = true;
+              - delay: 500ms
+              - ble_client.ble_write:
+                  id: bedroom_blind_ble
+                  service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+                  characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+                  value: [0xff, 0x03, 0x03, 0x03, 0x03, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78]
+              - delay: 500ms
+    on_disconnect:
+      then:
+        - logger.log:
+            level: WARN
+            format: "Bedroom blind disconnected"
+        - lambda: id(br_connected) = false;
+
+globals:
+  - id: br_pos_byte
+    type: int
+    initial_value: '0'
+  - id: br_group_byte
+    type: int
+    initial_value: '0'
+  - id: br_connected
+    type: bool
+    initial_value: 'false'
+  - id: br_battery_low
+    type: bool
+    initial_value: 'false'
+  - id: br_initialized
+    type: bool
+    initial_value: 'false'
+
+binary_sensor:
+  - platform: template
+    name: "Bedroom Blind Connected"
+    device_class: connectivity
+    lambda: return id(br_connected);
+
+  - platform: template
+    name: "Bedroom Blind Battery Low"
+    device_class: battery
+    lambda: return id(br_battery_low);
+
+cover:
+  - platform: template
+    id: bedroom_blind_cover
+    name: "Bedroom Blind"
+    device_class: blind
+    has_position: true
+    open_action:
+      - logger.log:
+          level: INFO
+          format: "Bedroom blind: open"
+      - ble_client.ble_write:
+          id: bedroom_blind_ble
+          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+          value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0xe8, 0x03]
+      - cover.template.publish:
+          id: bedroom_blind_cover
+          state: OPEN
+          current_operation: IDLE
+    close_action:
+      - logger.log:
+          level: INFO
+          format: "Bedroom blind: close"
+      - ble_client.ble_write:
+          id: bedroom_blind_ble
+          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+          value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0x00, 0x00]
+      - cover.template.publish:
+          id: bedroom_blind_cover
+          state: CLOSED
+          current_operation: IDLE
+    stop_action:
+      - logger.log:
+          level: INFO
+          format: "Bedroom blind: stop"
+      - ble_client.ble_write:
+          id: bedroom_blind_ble
+          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+          value: [0xff, 0x78, 0xea, 0x41, 0x5f, 0x03, 0x01]
+      - cover.template.publish:
+          id: bedroom_blind_cover
+          current_operation: IDLE
+    position_action:
+      - lambda: |-
+          int pct = (int)((1.0f - pos) * 100.0f + 0.5f);
+          id(br_pos_byte) = ((100 - pct) * 10) % 256;
+          if (pct > 74) id(br_group_byte) = 0x00;
+          else if (pct > 48) id(br_group_byte) = 0x01;
+          else if (pct > 23) id(br_group_byte) = 0x02;
+          else id(br_group_byte) = 0x03;
+          ESP_LOGI("blind", "Bedroom blind: set position %d%%", (int)(pos*100));
+      - ble_client.ble_write:
+          id: bedroom_blind_ble
+          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+          value: !lambda "return {0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, (uint8_t)id(br_pos_byte), (uint8_t)id(br_group_byte)};"
+      - cover.template.publish:
+          id: bedroom_blind_cover
+          position: !lambda return pos;
+          current_operation: IDLE
