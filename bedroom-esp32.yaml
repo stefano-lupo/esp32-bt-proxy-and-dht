@@ -60,12 +60,9 @@ sensor:
 ble_client:
   - mac_address: FD:74:46:D2:50:0F
     id: bedroom_blind_ble
+    auto_connect: false
     on_connect:
       then:
-        - logger.log:
-            level: INFO
-            format: "Bedroom blind connected"
-        - lambda: id(br_connected) = true;
         - if:
             condition:
               lambda: return !id(br_initialized);
@@ -78,6 +75,10 @@ ble_client:
                   characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
                   value: [0xff, 0x03, 0x03, 0x03, 0x03, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78]
               - delay: 500ms
+        - lambda: id(br_connected) = true;
+        - logger.log:
+            level: INFO
+            format: "Bedroom blind connected"
     on_disconnect:
       then:
         - logger.log:
@@ -102,6 +103,10 @@ globals:
     type: bool
     initial_value: 'false'
 
+button:
+  - platform: restart
+    name: "Restart"
+
 binary_sensor:
   - platform: template
     name: "Bedroom Blind Connected"
@@ -123,40 +128,79 @@ cover:
       - logger.log:
           level: INFO
           format: "Bedroom blind: open"
-      - ble_client.ble_write:
-          id: bedroom_blind_ble
-          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
-          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
-          value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0xe8, 0x03]
-      - cover.template.publish:
-          id: bedroom_blind_cover
-          state: OPEN
-          current_operation: IDLE
+      - ble_client.connect: bedroom_blind_ble
+      - wait_until:
+          condition:
+            lambda: return id(br_connected);
+          timeout: 5s
+      - if:
+          condition:
+            lambda: return id(br_connected);
+          then:
+            - ble_client.ble_write:
+                id: bedroom_blind_ble
+                service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+                characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+                value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0xe8, 0x03]
+            - cover.template.publish:
+                id: bedroom_blind_cover
+                state: OPEN
+                current_operation: IDLE
+          else:
+            - logger.log:
+                level: WARN
+                format: "Bedroom blind: open failed (not connected)"
     close_action:
       - logger.log:
           level: INFO
           format: "Bedroom blind: close"
-      - ble_client.ble_write:
-          id: bedroom_blind_ble
-          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
-          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
-          value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0x00, 0x00]
-      - cover.template.publish:
-          id: bedroom_blind_cover
-          state: CLOSED
-          current_operation: IDLE
+      - ble_client.connect: bedroom_blind_ble
+      - wait_until:
+          condition:
+            lambda: return id(br_connected);
+          timeout: 5s
+      - if:
+          condition:
+            lambda: return id(br_connected);
+          then:
+            - ble_client.ble_write:
+                id: bedroom_blind_ble
+                service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+                characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+                value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0x00, 0x00]
+            - cover.template.publish:
+                id: bedroom_blind_cover
+                state: CLOSED
+                current_operation: IDLE
+          else:
+            - logger.log:
+                level: WARN
+                format: "Bedroom blind: close failed (not connected)"
     stop_action:
       - logger.log:
           level: INFO
           format: "Bedroom blind: stop"
-      - ble_client.ble_write:
-          id: bedroom_blind_ble
-          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
-          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
-          value: [0xff, 0x78, 0xea, 0x41, 0x5f, 0x03, 0x01]
-      - cover.template.publish:
-          id: bedroom_blind_cover
-          current_operation: IDLE
+      - ble_client.connect: bedroom_blind_ble
+      - wait_until:
+          condition:
+            lambda: return id(br_connected);
+          timeout: 5s
+      - if:
+          condition:
+            lambda: return id(br_connected);
+          then:
+            - ble_client.ble_write:
+                id: bedroom_blind_ble
+                service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+                characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+                value: [0xff, 0x78, 0xea, 0x41, 0x5f, 0x03, 0x01]
+            - cover.template.publish:
+                id: bedroom_blind_cover
+                current_operation: IDLE
+          else:
+            - logger.log:
+                level: WARN
+                format: "Bedroom blind: stop failed (not connected)"
     position_action:
       - lambda: |-
           int pct = (int)((1.0f - pos) * 100.0f + 0.5f);
@@ -166,12 +210,25 @@ cover:
           else if (pct > 23) id(br_group_byte) = 0x02;
           else id(br_group_byte) = 0x03;
           ESP_LOGI("blind", "Bedroom blind: set position %d%%", (int)(pos*100));
-      - ble_client.ble_write:
-          id: bedroom_blind_ble
-          service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
-          characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
-          value: !lambda "return {0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, (uint8_t)id(br_pos_byte), (uint8_t)id(br_group_byte)};"
-      - cover.template.publish:
-          id: bedroom_blind_cover
-          position: !lambda return pos;
-          current_operation: IDLE
+      - ble_client.connect: bedroom_blind_ble
+      - wait_until:
+          condition:
+            lambda: return id(br_connected);
+          timeout: 5s
+      - if:
+          condition:
+            lambda: return id(br_connected);
+          then:
+            - ble_client.ble_write:
+                id: bedroom_blind_ble
+                service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+                characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+                value: !lambda "return {0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, (uint8_t)id(br_pos_byte), (uint8_t)id(br_group_byte)};"
+            - cover.template.publish:
+                id: bedroom_blind_cover
+                position: !lambda return pos;
+                current_operation: IDLE
+          else:
+            - logger.log:
+                level: WARN
+                format: "Bedroom blind: set position failed (not connected)"

@@ -99,6 +99,10 @@ globals:
     type: bool
     initial_value: 'false'
 
+button:
+  - platform: restart
+    name: "Restart"
+
 binary_sensor:
   - platform: template
     name: "Living Room Blind Connected"
