@@ -28,6 +28,7 @@ web_server:
 
 time:
   - platform: sntp
+    id: sntp_time
 
 udp:
   addresses: !secret home_server_ip
@@ -39,84 +40,63 @@ esp32_ble:
   max_connections: 1
 
 esp32_ble_tracker:
-  on_ble_advertise:
-    - mac_address: FD:74:46:D2:50:0F
-      then:
-        - lambda: |-
-            ESP_LOGI("blind", "Bedroom blind discovered, RSSI: %d dBm", x.get_rssi());
-
-sensor:
-  - platform: dht
-    pin: GPIO4
-    model: DHT11
-    update_interval: 60s
-    temperature:
-      name: "DHT22 Temperature"
-      accuracy_decimals: 1
-    humidity:
-      name: "DHT22 Humidity"
-      accuracy_decimals: 1
-
-ble_client:
-  - mac_address: FD:74:46:D2:50:0F
-    id: bedroom_blind_ble
-    auto_connect: false
-    on_connect:
-      then:
-        - if:
-            condition:
-              lambda: return !id(br_initialized);
-            then:
-              - lambda: id(br_initialized) = true;
-              - delay: 500ms
-              - ble_client.ble_write:
-                  id: bedroom_blind_ble
-                  service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
-                  characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
-                  value: [0xff, 0x03, 0x03, 0x03, 0x03, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78]
-              - delay: 500ms
-        - lambda: id(br_connected) = true;
-        - logger.log:
-            level: INFO
-            format: "Bedroom blind connected"
-    on_disconnect:
-      then:
-        - logger.log:
-            level: WARN
-            format: "Bedroom blind disconnected"
-        - lambda: id(br_connected) = false;
 
 globals:
+  - id: br_ready
+    type: bool
+    initial_value: 'false'
   - id: br_pos_byte
     type: int
     initial_value: '0'
   - id: br_group_byte
     type: int
     initial_value: '0'
-  - id: br_connected
-    type: bool
-    initial_value: 'false'
-  - id: br_battery_low
-    type: bool
-    initial_value: 'false'
-  - id: br_initialized
-    type: bool
-    initial_value: 'false'
+
+ble_client:
+  - mac_address: FD:74:46:D2:50:0F
+    id: bedroom_blind
+    on_connect:
+      then:
+        - logger.log:
+            level: INFO
+            format: "Bedroom blind connected - sending handshake"
+        - delay: 500ms
+        - ble_client.ble_write:
+            id: bedroom_blind
+            service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+            characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+            value: [0xff, 0x03, 0x03, 0x03, 0x03, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78]
+        - delay: 200ms
+        - ble_client.ble_write:
+            id: bedroom_blind
+            service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
+            characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
+            value: !lambda |-
+              auto t = id(sntp_time).now();
+              ESP_LOGI("blind", "Sending timestamp %04d-%02d-%02d %02d:%02d:%02d",
+                t.year, t.month, t.day_of_month, t.hour, t.minute, t.second);
+              return {0xff, 0x78, 0xea, 0x41, 0x02, 0x00,
+                      (uint8_t)(t.year - 2000),
+                      (uint8_t)t.month,
+                      (uint8_t)t.day_of_month,
+                      (uint8_t)t.hour,
+                      (uint8_t)t.minute,
+                      (uint8_t)t.second};
+        - delay: 200ms
+        - lambda: id(br_ready) = true;
+        - logger.log:
+            level: INFO
+            format: "Bedroom blind ready"
+    on_disconnect:
+      then:
+        - lambda: id(br_ready) = false;
+        - logger.log:
+            level: WARN
+            format: "Bedroom blind disconnected"
 
 button:
   - platform: restart
     name: "Restart"
-
-binary_sensor:
-  - platform: template
-    name: "Bedroom Blind Connected"
-    device_class: connectivity
-    lambda: return id(br_connected);
-
-  - platform: template
-    name: "Bedroom Blind Battery Low"
-    device_class: battery
-    lambda: return id(br_battery_low);
 
 cover:
   - platform: template
@@ -125,20 +105,15 @@ cover:
     device_class: blind
     has_position: true
     open_action:
-      - logger.log:
-          level: INFO
-          format: "Bedroom blind: open"
-      - ble_client.connect: bedroom_blind_ble
-      - wait_until:
-          condition:
-            lambda: return id(br_connected);
-          timeout: 5s
       - if:
           condition:
-            lambda: return id(br_connected);
+            lambda: return id(br_ready);
           then:
+            - logger.log:
+                level: INFO
+                format: "Bedroom blind: open"
             - ble_client.ble_write:
-                id: bedroom_blind_ble
+                id: bedroom_blind
                 service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
                 characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
                 value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0xe8, 0x03]
@@ -149,22 +124,17 @@ cover:
           else:
             - logger.log:
                 level: WARN
-                format: "Bedroom blind: open failed (not connected)"
+                format: "Bedroom blind: open dropped (not connected)"
     close_action:
-      - logger.log:
-          level: INFO
-          format: "Bedroom blind: close"
-      - ble_client.connect: bedroom_blind_ble
-      - wait_until:
-          condition:
-            lambda: return id(br_connected);
-          timeout: 5s
       - if:
           condition:
-            lambda: return id(br_connected);
+            lambda: return id(br_ready);
           then:
+            - logger.log:
+                level: INFO
+                format: "Bedroom blind: close"
             - ble_client.ble_write:
-                id: bedroom_blind_ble
+                id: bedroom_blind
                 service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
                 characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
                 value: [0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, 0x00, 0x00]
@@ -175,22 +145,17 @@ cover:
           else:
             - logger.log:
                 level: WARN
-                format: "Bedroom blind: close failed (not connected)"
+                format: "Bedroom blind: close dropped (not connected)"
     stop_action:
-      - logger.log:
-          level: INFO
-          format: "Bedroom blind: stop"
-      - ble_client.connect: bedroom_blind_ble
-      - wait_until:
-          condition:
-            lambda: return id(br_connected);
-          timeout: 5s
       - if:
           condition:
-            lambda: return id(br_connected);
+            lambda: return id(br_ready);
           then:
+            - logger.log:
+                level: INFO
+                format: "Bedroom blind: stop"
             - ble_client.ble_write:
-                id: bedroom_blind_ble
+                id: bedroom_blind
                 service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
                 characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
                 value: [0xff, 0x78, 0xea, 0x41, 0x5f, 0x03, 0x01]
@@ -200,7 +165,7 @@ cover:
           else:
             - logger.log:
                 level: WARN
-                format: "Bedroom blind: stop failed (not connected)"
+                format: "Bedroom blind: stop dropped (not connected)"
     position_action:
       - lambda: |-
           int pct = (int)((1.0f - pos) * 100.0f + 0.5f);
@@ -210,17 +175,12 @@ cover:
           else if (pct > 23) id(br_group_byte) = 0x02;
           else id(br_group_byte) = 0x03;
           ESP_LOGI("blind", "Bedroom blind: set position %d%%", (int)(pos*100));
-      - ble_client.connect: bedroom_blind_ble
-      - wait_until:
-          condition:
-            lambda: return id(br_connected);
-          timeout: 5s
       - if:
           condition:
-            lambda: return id(br_connected);
+            lambda: return id(br_ready);
           then:
             - ble_client.ble_write:
-                id: bedroom_blind_ble
+                id: bedroom_blind
                 service_uuid: "00010203-0405-0607-0809-0a0b0c0d1910"
                 characteristic_uuid: "00010405-0405-0607-0809-0a0b0c0d1910"
                 value: !lambda "return {0xff, 0x78, 0xea, 0x41, 0xbf, 0x03, (uint8_t)id(br_pos_byte), (uint8_t)id(br_group_byte)};"
@@ -231,4 +191,4 @@ cover:
           else:
             - logger.log:
                 level: WARN
-                format: "Bedroom blind: set position failed (not connected)"
+                format: "Bedroom blind: set position dropped (not connected)"
