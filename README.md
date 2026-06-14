@@ -76,6 +76,10 @@ Each device exposes:
 | `DHT22 Humidity` | `sensor` | |
 | `Restart` | `button` | OTA-safe restart |
 
+## Session logs
+
+Debugging history lives in `sessions/YYYY-MM-DD.md`. Each file documents what was tried, what failed, the root cause, and current state. Start there if something breaks.
+
 ## Monitoring
 
 The `Bedroom Blind Connected` binary sensor can be used in a HA automation to alert if the BLE connection drops. Failed commands (blind not connected when HA sends one) log at `WARN` level and are visible in Seq under `Application = 'bedroom-esp32'` filtered for `dropped`.
