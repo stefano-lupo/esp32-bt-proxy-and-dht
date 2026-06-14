@@ -98,6 +98,12 @@ button:
   - platform: restart
     name: "Restart"
 
+binary_sensor:
+  - platform: template
+    name: "Bedroom Blind Connected"
+    device_class: connectivity
+    lambda: return id(br_ready);
+
 cover:
   - platform: template
     id: bedroom_blind_cover
